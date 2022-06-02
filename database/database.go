@@ -15,7 +15,9 @@ func GetDatabase() *sql.DB {
 	port := os.Getenv("DB_PORT")
 	database := os.Getenv("DB_DATABASE")
 
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, database))
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, database)
+
+	db, err := sql.Open("mysql", dsn)
 	helper.PanicIfError(err)
 
 	return db
