@@ -38,7 +38,7 @@ func (repository *sessionRepository) FindById(ctx context.Context, tx *sql.Tx, s
 	defer rows.Close()
 
 	if rows.Next() {
-		err := rows.Scan(session.Id, session.UserId, session.CreatedAt, session.ExpiredAt)
+		err := rows.Scan(&session.Id, &session.UserId, &session.CreatedAt, &session.ExpiredAt)
 		helper.PanicIfError(err)
 
 		return session, nil

@@ -13,7 +13,13 @@ func GetDatabase() *sql.DB {
 	password := os.Getenv("DB_PASSWORD")
 	host := os.Getenv("DB_HOST")
 	port := os.Getenv("DB_PORT")
-	database := os.Getenv("DB_DATABASE")
+	database := ""
+
+	if os.Getenv("ENVIRONMENT") == "production" {
+		database = os.Getenv("DB_DATABASE")
+	} else {
+		database = os.Getenv("DB_DATABASE_TEST")
+	}
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", username, password, host, port, database)
 
