@@ -20,11 +20,12 @@ type UserService interface {
 
 type userService struct {
 	repository.UserRepository
+	repository.SessionRepository
 	*sql.DB
 }
 
-func NewUserService(userRepository repository.UserRepository, DB *sql.DB) UserService {
-	return &userService{UserRepository: userRepository, DB: DB}
+func NewUserService(userRepository repository.UserRepository, sessionRepository repository.SessionRepository, DB *sql.DB) UserService {
+	return &userService{UserRepository: userRepository, SessionRepository: sessionRepository, DB: DB}
 }
 
 func (service *userService) Register(ctx context.Context, request web.RegisterUserRequest) web.UserSessionResponse {
@@ -33,12 +34,10 @@ func (service *userService) Register(ctx context.Context, request web.RegisterUs
 
 	defer helper.CommitOrRollback(tx)
 
-	id := uuid.NewString()
 	password := helper.GeneratePassword(request.Password)
-	helper.PanicIfError(err)
 
 	user := domain.User{
-		Id:        id,
+		Id:        uuid.NewString(),
 		Email:     request.Email,
 		Username:  request.Username,
 		Password:  password,
@@ -49,7 +48,20 @@ func (service *userService) Register(ctx context.Context, request web.RegisterUs
 
 	service.UserRepository.Save(ctx, tx, user)
 
-	return web.NewUserSessionResponse(user, "example")
+	// save session to database
+	session := domain.Session{
+		Id:        uuid.NewString(),
+		UserId:    user.Id,
+		CreatedAt: helper.GenerateMilisTimeNow(),
+		ExpiredAt: helper.GenerateMilisTimeWeek(),
+	}
+
+	service.SessionRepository.Save(ctx, tx, session)
+
+	// generate token
+	token, err := helper.NewTokenString(session)
+
+	return web.NewUserSessionResponse(user, token)
 }
 
 func (service *userService) Update(ctx context.Context, request web.UpdateUserRequest) web.UserResponse {
@@ -100,9 +112,17 @@ func (service *userService) Delete(ctx context.Context, request web.DeleteUserRe
 		panic("user password is not valid")
 	}
 
-	service.UserRepository.Delete(ctx, tx, domain.User{
+	user := domain.User{
 		Id: request.Id,
-	})
+	}
+
+	session := domain.Session{
+		UserId: user.Id,
+	}
+
+	// delete from repository
+	service.UserRepository.Delete(ctx, tx, user)
+	service.SessionRepository.Delete(ctx, tx, session)
 
 	return web.NewUserResponse(findUser)
 }
@@ -121,5 +141,29 @@ func (service *userService) Login(ctx context.Context, request web.LoginUserRequ
 		panic("user password is not valid")
 	}
 
-	return web.NewUserSessionResponse(findUser, "example")
+	// check if session exist
+	session, err := service.SessionRepository.FindById(ctx, tx, domain.Session{
+		UserId: findUser.Id,
+	})
+
+	token := ""
+	if err != nil {
+		// if session not exist, create new session
+		session := domain.Session{
+			Id:        uuid.NewString(),
+			UserId:    findUser.Id,
+			CreatedAt: helper.GenerateMilisTimeNow(),
+			ExpiredAt: helper.GenerateMilisTimeWeek(),
+		}
+
+		service.SessionRepository.Save(ctx, tx, session)
+
+		token, err = helper.NewTokenString(session)
+		helper.PanicIfError(err)
+	} else {
+		token, err = helper.NewTokenString(session)
+		helper.PanicIfError(err)
+	}
+
+	return web.NewUserSessionResponse(findUser, token)
 }
