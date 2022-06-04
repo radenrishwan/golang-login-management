@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"login-management/exception"
 	"login-management/helper"
 	"login-management/model/domain"
 	"login-management/model/web"
 	"login-management/repository"
+	"login-management/validation"
 )
 
 type UserService interface {
@@ -29,6 +31,8 @@ func NewUserService(userRepository repository.UserRepository, sessionRepository 
 }
 
 func (service *userService) Register(ctx context.Context, request web.RegisterUserRequest) web.UserSessionResponse {
+	validation.UserRegisterValidation(request)
+
 	tx, err := service.DB.Begin()
 	helper.PanicIfError(err)
 
@@ -36,7 +40,13 @@ func (service *userService) Register(ctx context.Context, request web.RegisterUs
 
 	password := helper.GeneratePassword(request.Password)
 
-	user := domain.User{
+	// check if user exist
+	user, err := service.UserRepository.FindByUsername(ctx, tx, domain.User{Username: request.Username})
+	if err == nil {
+		panic(exception.NewUserException("user already exist"))
+	}
+
+	user = domain.User{
 		Id:        uuid.NewString(),
 		Email:     request.Email,
 		Username:  request.Username,
@@ -65,6 +75,8 @@ func (service *userService) Register(ctx context.Context, request web.RegisterUs
 }
 
 func (service *userService) Update(ctx context.Context, request web.UpdateUserRequest) web.UserResponse {
+	validation.UserUpdateValidation(request)
+
 	tx, err := service.DB.Begin()
 	helper.PanicIfError(err)
 
@@ -73,11 +85,13 @@ func (service *userService) Update(ctx context.Context, request web.UpdateUserRe
 	findUser, err := service.UserRepository.FindById(ctx, tx, domain.User{
 		Id: request.Id,
 	})
-	helper.PanicIfError(err)
+	if err != nil {
+		panic(exception.NewUserException(err.Error()))
+	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(findUser.Password), []byte(request.Password))
 	if err != nil {
-		panic("user password is not valid")
+		panic(exception.NewUserException("user password is not valid"))
 	}
 
 	password := helper.GeneratePassword(request.Password)
@@ -97,6 +111,8 @@ func (service *userService) Update(ctx context.Context, request web.UpdateUserRe
 }
 
 func (service *userService) Delete(ctx context.Context, request web.DeleteUserRequest) web.UserResponse {
+	validation.UserDeleteValidation(request)
+
 	tx, err := service.DB.Begin()
 	helper.PanicIfError(err)
 
@@ -105,11 +121,13 @@ func (service *userService) Delete(ctx context.Context, request web.DeleteUserRe
 	findUser, err := service.UserRepository.FindById(ctx, tx, domain.User{
 		Id: request.Id,
 	})
-	helper.PanicIfError(err)
+	if err != nil {
+		panic(exception.NewUserException(err.Error()))
+	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(findUser.Password), []byte(request.Password))
 	if err != nil {
-		panic("user password is not valid")
+		panic(exception.NewUserException("user password is not valid"))
 	}
 
 	user := domain.User{
@@ -128,17 +146,21 @@ func (service *userService) Delete(ctx context.Context, request web.DeleteUserRe
 }
 
 func (service *userService) Login(ctx context.Context, request web.LoginUserRequest) web.UserSessionResponse {
+	validation.UserLoginValidation(request)
+
 	tx, err := service.DB.Begin()
 	helper.PanicIfError(err)
 
 	defer helper.CommitOrRollback(tx)
 
 	findUser, err := service.UserRepository.FindByUsername(ctx, tx, domain.User{Username: request.Username})
-	helper.PanicIfError(err)
+	if err != nil {
+		panic(exception.NewUserException(err.Error()))
+	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(findUser.Password), []byte(request.Password))
 	if err != nil {
-		panic("user password is not valid")
+		panic(exception.NewUserException("user password is not valid"))
 	}
 
 	// check if session exist
@@ -161,8 +183,28 @@ func (service *userService) Login(ctx context.Context, request web.LoginUserRequ
 		token, err = helper.NewTokenString(session)
 		helper.PanicIfError(err)
 	} else {
-		token, err = helper.NewTokenString(session)
-		helper.PanicIfError(err)
+		// if session exist, check if session is expired
+		if session.ExpiredAt < helper.GenerateMilisTimeNow() {
+			// create new session
+			session := domain.Session{
+				Id:        uuid.NewString(),
+				UserId:    findUser.Id,
+				CreatedAt: helper.GenerateMilisTimeNow(),
+				ExpiredAt: helper.GenerateMilisTimeWeek(),
+			}
+
+			// delete old session
+			service.SessionRepository.Delete(ctx, tx, session)
+
+			// save new session
+			service.SessionRepository.Save(ctx, tx, session)
+
+			token, err = helper.NewTokenString(session)
+			helper.PanicIfError(err)
+		} else {
+			token, err = helper.NewTokenString(session)
+			helper.PanicIfError(err)
+		}
 	}
 
 	return web.NewUserSessionResponse(findUser, token)
